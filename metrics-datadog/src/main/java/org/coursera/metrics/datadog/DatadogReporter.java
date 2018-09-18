@@ -308,6 +308,58 @@ public class DatadogReporter extends ScheduledReporter {
       return this;
     }
 
+    /**
+     * Adds the task_name and task_version tags to the list sent to datadog with each and every metric. Gracefully
+     * ignored if not running in AWS ECS.
+     *
+     * As this information isn't guaranteed on container startup, allows for a configurable retry. See
+     * withECSTaskTagsNoWait for a method  that never retries.
+     *
+     * @param attempts
+     * @param delayMillis
+     * @return
+     * @throws IOException
+     */
+    public Builder withECSTaskTags(int attempts, long delayMillis) throws IOException {
+      if (!AwsHelper.isRunningInEcs() || attempts <= 0) {
+          return this;
+      }
+
+      long delay = Math.max(0, delayMillis);
+      int remainingAttempts = attempts;
+
+      while (true) {
+        AwsHelper.EcsMetadata metadata = AwsHelper.getEcsMetadata();
+
+        if (metadata != null) {
+          List<String> taskTags = new ArrayList<>(2);
+          taskTags.add("task_name:" + metadata.getTaskDefinitionFamily());
+          taskTags.add("task_version:" + metadata.getTaskDefinitionRevision());
+          return withTags(taskTags);
+        }
+
+        try {
+          remainingAttempts--;
+          if (remainingAttempts <= 0) {
+              return this;
+          }
+          Thread.sleep(delay);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return this;
+        }
+      }
+    }
+
+    /**
+     * Convenience method to run withECSTaskTags only a single attempt.
+     * @return
+     * @throws IOException
+     */
+    public Builder withECSTaskTagsNoWait() throws IOException {
+        return withECSTaskTags(1, 0);
+    }
+
     public Builder withExpansions(EnumSet<Expansion> expansions) {
       this.expansions = expansions;
       return this;
@@ -329,7 +381,7 @@ public class DatadogReporter extends ScheduledReporter {
      * @param tags List of tags eg: [env:prod, version:1.0.1, name:kafka_client] etc
      */
     public Builder withTags(List<String> tags) {
-      this.tags = tags;
+      this.tags = TagUtils.mergeTags(this.tags, tags);
       return this;
     }
 
